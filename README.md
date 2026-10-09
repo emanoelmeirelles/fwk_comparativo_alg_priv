@@ -1,72 +1,47 @@
 # fwk_comparativo_alg_priv
-# Dicionário de Dados — Framework de Comparação de Algoritmos de Privacidade
 
-## Princípio
+Framework para comparar algoritmos de privacidade em consultas espaço-textuais sob as mesmas condições experimentais. Este repositório acompanha a dissertação de mestrado *Preservação de Privacidade em Consultas Espaço-Textuais* (PGCC/UEFS, 2026), de Emanoel Meirelles, orientada por João Batista da Rocha Junior. O framework está descrito no Capítulo 4 da dissertação, e as figuras do Capítulo 5 foram geradas por este código.
 
-O framework **lê, agrega e plota**. Não recalcula métrica com fórmula própria,
-não injeta constante, não estima o que não foi medido. Se uma coluna
-obrigatória estiver ausente ou com tipo errado, o framework **falha com erro
-explícito** — nunca preenche com zero, média ou suposição silenciosa.
+O repositório contém o framework. Os algoritmos comparados na dissertação não fazem parte dele.
 
-Cada algoritmo  entrega **um CSV próprio**, um registro por execução individual (não pré-agregado — a agregação por `n_total` é responsabilidade do framework, não do algoritmo).
+## Como o framework funciona
 
----
+Cada algoritmo participante grava um CSV com uma linha por execução. O framework lê dois CSVs, verifica se seguem o formato de dados, agrega as execuções e gera os gráficos comparativos. Ele não recalcula métricas e não preenche dado ausente: se faltar uma coluna obrigatória, a execução para com erro. Se os dois arquivos declararem o mesmo algoritmo, ou se os valores testados em um experimento não coincidirem, a execução também para.
 
-## Schema obrigatório — `resultados_<algoritmo>.csv`
+Colunas obrigatórias (`COLUNAS_OBRIGATORIAS` em `framework_comparativo_v7.py`):
 
-| Coluna | Tipo | Unidade | Como deve ser obtida | Quem calcula |
-|---|---|---|---|---|
-| `algorithm` | string | — | Rótulo fixo identificando o algoritmo (ex.: `"Liu_Wang_2022"`, `"Hibrido_Multiestrategia"`) | Script do algoritmo |
-| `run_id` | int | — | Índice sequencial da simulação (0, 1, 2, ...) | Script do algoritmo |
-| `n_total` | int | contagem | Número **real** de dummies gerados nesta execução (pode divergir do `n` solicitado) | Script do algoritmo |
-| `Gen_ms` | float | milissegundos | `time.perf_counter()` cronometrando **apenas** a chamada da função de geração de dummies | Script do algoritmo |
-| `Query_ms` | float | milissegundos | `time.perf_counter()` cronometrando o envio real das consultas (uma por dummy) e recebimento das respostas — **medição real de rede/API**, nunca constante multiplicada por n | Script do algoritmo |
-| `Filter_ms` | float | milissegundos | `time.perf_counter()` cronometrando a filtragem local (dedup + filtro espacial + filtro textual) | Script do algoritmo |
-| `comm_cost_bytes` | int | bytes | Tamanho real do payload recebido do servidor (`len(json.dumps(payload).encode('utf-8'))` ou equivalente) — nunca `constante × n_pois` | Script do algoritmo |
-| `entropy` | float | bits | `metrics_core.shannon_entropy_spatial(dummies, center, radius_m)` | **Obrigatoriamente** `metrics_core.py` |
-| `precision` | float | [0,1] | `metrics_core.evaluate_precision_recall(...)` | **Obrigatoriamente** `metrics_core.py` |
-| `recall` | float | [0,1] | `metrics_core.evaluate_precision_recall(...)` | **Obrigatoriamente** `metrics_core.py` |
+`algorithm`, `run_id`, `experimento`, `cidade`, `palavra_chave`, `raio_busca_m`, `n_total`, `Gen_ms`, `Filter_ms`, `ttfb_ms_total`, `download_ms_total`, `parse_ms_total`, `bytes_fio`, `entropy`, `dist_min_usuario_m`, `precision`, `recall`, `n_ground_truth`
 
-`Total_ms` **não é uma coluna de entrada**. O framework calcula
-`Total_ms = Gen_ms + Query_ms + Filter_ms` por linha, depois agrega. Nenhum
-algoritmo deve entregar `Total_ms` pronto — isso abriria espaço para inflar
-ou reduzir um dos três componentes sem que o framework perceba.
+Além delas, o arquivo precisa ter `repeticao` e `localizacao_id`. Na dissertação, cada algoritmo rodou duas vezes seguidas na mesma localização, e só a segunda repetição entra na comparação.
 
----
+Colunas opcionais: `Temporal_ms`, `n_rodadas`, `bytes_corpo`, `n_requisicoes`, `rede_ms_total` e `centroide_erro_m`. Quando uma delas falta, o framework preenche um valor padrão ou a deriva das outras, e informa isso na saída.
 
-## Pré-condições para comparação válida (contrato, não schema)
+O tempo total de cada execução é `Gen_ms + Filter_ms + Temporal_ms + rede_ms_total`, e `rede_ms_total` é a soma de TTFB, download e parse.
 
-Estas condições não aparecem como coluna, mas invalidam a comparação se
-forem diferentes entre os dois CSVs:
+## Arquivos
 
-1. **Mesmo dataset de POIs** (mesmo snapshot OSM, mesma cidade, mesmo raio de
-   extração) para as execuções de ambos os algoritmos no mesmo cenário.
-2. **Mesmo `center` e `radius_m`** passados para `shannon_entropy_spatial()`
-   — caso contrário a grade de entropia cobre áreas diferentes e os números
-   deixam de ser comparáveis mesmo vindo da mesma função.
-3. **Mesmo `tolerance_m`** (raio de precisão) passado para
-   `evaluate_precision_recall()` nos dois algoritmos.
-4. **Mesmos valores de `n`** testados (ex.: `{5,10,15,20,25,30}`) nos dois
-   CSVs, para que o `groupby("n_total")` produza pontos alinhados no eixo X.
+| Arquivo | Papel |
+|---|---|
+| `framework_comparativo_v7.py` | Validação, agregação e geração dos gráficos |
+| `metricas.py` | Módulo de métricas que os algoritmos participantes devem usar (entropia, precisão e recall, erro do centroide, distância haversine, filtragem local) |
+| `config_padrao.py` | Parâmetros dos experimentos da dissertação; o comparador lê dele a ordem das palavras-chave |
 
-O framework valida (1)–(4) na medida do possível (choca `n_total` presentes
-nos dois arquivos) e avisa se um dos algoritmos tem valores de `n` que o
-outro não tem — mas não pode validar sozinho se o dataset OSM foi o mesmo;
-isso é responsabilidade de quem roda os experimentos.
+## Requisitos
 
----
+Python 3 e os pacotes do `requirements.txt`:
 
-## Mapeamento gráfico → colunas usadas
+```
+pip install -r requirements.txt
+```
 
-| Gráfico | Colunas de entrada | Cálculo do framework |
-|---|---|---|
-| Tempo Total de Execução | `Gen_ms`, `Query_ms`, `Filter_ms` | soma por linha, depois média por `n_total` |
-| Entropia | `entropy` | média por `n_total` |
-| Tempo Médio de Consulta | `Query_ms` | média por `n_total` |
-| Custo de Comunicação | `comm_cost_bytes` | média por `n_total`, convertida para KB |
-| Probabilidade de Rastreamento | `n_total` | `1/n_total` — **curva teórica**, rotulada como referência, não como métrica medida |
-| Tempo de Geração Local | `Gen_ms` | média por `n_total` |
+## Uso
 
+```
+python3 framework_comparativo_v7.py resultados_algoritmo_a.csv resultados_algoritmo_b.csv
+```
 
+As figuras são gravadas em `graficos_osmlocal_rep2/`, uma pasta por experimento (cidade, palavra-chave, raio de busca e número de *dummies*).
 
+## Condições da rodada da dissertação
 
+Os dados de pontos de interesse vieram de uma instância local da API Overpass em Docker (imagem `wiktorn/overpass-api`). O banco foi carregado com os extratos da Geofabrik da Bahia e de São Paulo de 30/09/2026 (`timestamp=2026-09-30T20:22:42Z`). Os extratos foram recortados com `osmium extract -s smart` em caixas de ±0,05° em torno do centro de cada cidade (Salvador, Feira de Santana e São Paulo). O banco ficou congelado, sem atualizações.
